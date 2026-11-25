@@ -30,207 +30,32 @@ Sequential policy updates let cooperative agents adapt to teammates as their pol
 
 \section{Introduction}
 
-Sequential policy optimization lets an agent adapt to teammates that have already updated while continuing to use data from the old joint policy \citep{kuba2022,zhong2024}. In heterogeneous-agent proximal policy optimization (HAPPO), a transition receives an importance weight equal to the product of the preceding actors' new-to-old action probability ratios. This correction is useful when teammates' policies change, but its second moment can grow quickly with the number of preceding updates \citep{le2025}. HAPPO clips the current actor's ratio in its proximal policy optimization (PPO) surrogate \citep{schulman2017,kuba2022}. The preceding product still multiplies every active sample gradient. A transition with a large product can amplify an error in the estimated advantage and, when the other transitions have different gradient directions, steer the batch update.
-
-A late actor cannot undo the preceding actors' policy changes. It can, however, limit its own contribution to the cumulative importance weights passed to the remaining actors. This observation suggests measuring the size of the update in units of the resulting change in the \emph{joint} importance ratio. Squaring that change makes the regularization stronger in contexts where the preceding actors have already produced a large second moment. The penalty requires neither a fixed clipping threshold for the preceding product nor allocation of a separate variance budget to each agent.
-
-We derive this penalty from HAPPO's sample gradient and show that its population value is half the variance increment attributable to the current actor. We then give a first-order implementation in the heterogeneous-agent reinforcement learning (HARL) codebase and evaluate the available configuration-matched runs across simulated locomotion, particle environments, and StarCraft micromanagement. Performance gains are concentrated in particular settings and seeds. We report those cases alongside unfavorable results and identify the comparisons needed to establish whether the gains come from the prefix weighting itself.
-
 \section{Related work}
 
-\paragraph{Sequential trust-region updates.}
-\citet{kuba2022} develop a sequential update scheme based on multi-agent advantage decomposition and implement it through trust-region and PPO-style objectives. \citet{zhong2024} extend this framework and provide the HARL implementation used here. \citet{wu2021} coordinate PPO step sizes across agents using joint ratios in a concurrent update setting. \citet{shek2025} study allocating a global Kullback--Leibler (KL) budget across agents in heterogeneous-agent trust-region policy optimization (HATRPO). Our penalty uses the increment in the second moment of the cumulative action ratio as the cost of a candidate actor update.
+\paragraph{Trust-region methods for cooperative learning.}
+Trust Region Policy Optimization (TRPO) constrains the Kullback--Leibler (KL) divergence between successive policies, while Proximal Policy Optimization (PPO) can limit changes through a clipped surrogate objective~\citep{schulman2015,schulman2017}. Multi-Agent PPO (MAPPO) uses a centralized value function to train decentralized policies with per-agent PPO ratios~\citep{yu2022}. Heterogeneous-Agent TRPO (HATRPO) and Heterogeneous-Agent PPO (HAPPO) use advantage decomposition to update policies sequentially. They reuse the rollout collected before the sequence of updates and apply importance sampling to account for teammates that have already updated~\citep{kuba2022}. \citet{zhong2024} extend this sequential framework to a broader class of algorithms through heterogeneous-agent mirror learning. \citet{shek2026} allocate a joint KL budget across HATRPO updates. The Multi-Agent Transformer (MAT) uses the advantage decomposition to parameterize a policy that conditions each action on preceding agents' actions~\citep{wen2022}. We study sequential policy updates with conditionally independent action sampling.
 
-\paragraph{Importance sampling and cumulative ratios.}
-\citet{metelli2020} connect the second moment of an importance ratio to order-two R\'enyi divergence and use it to control uncertainty in policy optimization. Their trajectory weights compound over time. Our weights compound across agents at a fixed rollout context, which yields an exact conditional factorization over actions. The closest comparison, \citet{le2025}, analyzes high variance in sequential multi-agent policy optimization and clips the preceding importance product in the update objective. Our surrogate uses the original product and adds a penalty that depends on the current actor's ratio. The two interventions affect different quantities: clipping reduces the influence of an already-large product on the current gradient, while the penalty makes further changes to that product costly.
+\paragraph{Variance from teammates' policy updates.}
+\citet{kuba2021variance} analyze how policy-gradient baselines can reduce variance due to teammates' exploration. A separate source of variance comes from multiplying teammates' likelihood ratios when their policies change on a shared batch~\citep{wu2021,le2025}. Coordinated PPO (CoPPO) clips the product of other agents' ratios before applying a second clipping operation to the combined ratio~\citep{wu2021}. Agent-by-agent Policy Optimization (A2PO) uses a Retrace-inspired correction to estimate advantages under policies in which preceding agents have updated~\citep{wang2023}. \citet{le2025} show that the second moment of the prefix weight can grow exponentially with the number of preceding agents and cap this weight in the surrogate for clip-HAPPO and clip-HATRPO. \citet{zhao2026aggregate} study products of agents' ratios in jointly differentiated objectives and propose aggregating information in the advantage. Reg-HAPPO uses the original prefix weight in HAPPO's surrogate and penalizes the squared change in the cumulative weight caused by the current policy update. The same change in the current agent's ratio incurs a larger penalty on samples with larger prefix weights.
 
-\section{HAPPO and the influence of earlier updates}
-\label{sec:background}
+\paragraph{R\'enyi divergence in importance sampling.}
+Policy Optimization via Importance Sampling (POIS) uses a R\'enyi-divergence term in a high-confidence surrogate for reusing trajectories in single-agent policy search~\citep{metelli2018,metelli2020}. In action-based POIS, trajectory likelihood ratios accumulate over time. Reg-HAPPO uses the same relation between order-two R\'enyi divergence and importance-weight variance for a product over agents at a single transition. For supported importance ratios with finite second moments, conditional factorization and a fixed rollout context distribution make the expected squared change in the cumulative weight equal to the variance increment attributable to the current agent's update.
 
-Consider a cooperative partially observed Markov game with $n$ actors and a shared team reward. Let $x$ collect the observations or histories used to condition the actors at a single decision. The rollout joint action distribution factorizes given $x$, and we denote the distribution of rollout contexts by $d_0$. Let $Q(dx,da)=d_0(dx)\prod_{j=1}^n\pi_0^j(da^j\mid x)$ denote the fixed behavior distribution for the actor update. Contexts may be correlated among agents and across time. The ratio derivations require action factorization \emph{conditional} on $x$, and do not require independent contexts. We relabel actors by their order within one update sweep, and use independent parameters so the preceding actors are fixed during the current update.
 
-Write $r_j=\pi_j(a^j\mid x)/\pi_0^j(a^j\mid x)$, with $\pi_j$ the accepted policy for $j<m$ and the candidate policy for $j=m$. The preceding product is $W_{m-1}=\prod_{j<m}r_j$, with $W_0=1$ and $W_m=W_{m-1}r_m$. We assume that each target policy is absolutely continuous with respect to its behavior policy on the same context and action mask. HAPPO uses a joint advantage estimate $\hat A$ and maximizes the surrogate
-\begin{equation}
- L_m^{\mathrm{HAPPO}}(\theta_m)=
- \E_{\mathrm{rollout}}\!\left[
- W_{m-1}\min\left(r_m\hat A,\ \clip(r_m,1-\epsilon,1+\epsilon)\hat A\right)
- \right].
- \label{eq:happo}
-\end{equation}
-Here the rollout average allows an advantage estimate computed from the remainder of the trajectory. We hold it fixed when differentiating the actor objective. The product $W_{m-1}$ can be moved outside the minimum because it is nonnegative.
+\section{Preliminaries}
 
-Away from clipping boundaries, let $I_m$ indicate that the chosen branch has derivative with respect to $r_m$. With $u_m=\nabla_{\theta_m}\log\pi_{\theta_m}^m(a^m\mid x)$, a sample contributes
-\begin{equation}
- g_m = W_{m-1}r_m\hat A I_m u_m.
- \label{eq:gradient}
-\end{equation}
-A large $W_{m-1}$ scales each active gradient contribution linearly and its squared norm quadratically. If $\hat A=A+\xi$, on a fixed active branch the contribution from the error $\xi$ is $W_{m-1}r_m\xi u_m$. In particular, at the old actor $r_m=1$ and $I_m=1$ for $\epsilon>0$. With finite moments and $h_m=r_m\hat A I_m u_m$, the trace of the covariance of a sample gradient is
-\begin{equation}
- \operatorname{tr}\operatorname{Cov}(g_m)
- = \E[W_{m-1}^2\|h_m\|_2^2]-\|\E[W_{m-1}h_m]\|_2^2.
- \label{eq:gradcov}
-\end{equation}
-The dependence of $h_m$ on the sample matters: large weights can co-occur with small gradients, and weighted gradients pointing in different directions can cancel. Under a uniform bound $\|h_m\|_2\le H$, the second moment in \eqref{eq:gradcov} is at most $H^2\E_Q W_{m-1}^2$. This is an upper bound under a score-feature assumption, rather than a prediction of actual gradient variance.
+\section{Method}
 
-\section{Regularizing the change in the cumulative weight}
-\label{sec:method}
-
-Penalizing $W_{m-1}$ alone gives zero gradient for the current actor. Instead we measure the change made by the candidate update, $W_m-W_{m-1}=W_{m-1}(r_m-1)$. We call the resulting variant Reg-HAPPO and maximize
-\begin{align}
- R_m(\theta_m) &=
- \tfrac12\E_Q\left[W_{m-1}^2(r_m(\theta_m)-1)^2\right],\label{eq:regularizer}\\
- L_m^{\mathrm{reg}}(\theta_m) &=
- L_m^{\mathrm{HAPPO}}(\theta_m)-\beta R_m(\theta_m).
- \label{eq:objective}
-\end{align}
-The implementation averages the same sample expression over its actor minibatch. At a fixed ratio deviation, a tenfold larger preceding product gives a hundredfold larger contribution to the penalty. Once the actor has moved, the regularizer contributes $-\beta W_{m-1}^2(r_m-1)r_m u_m$ to the ascent direction. It also acts on samples for which the PPO objective has reached its flat clipping branch. The regularizer's first derivative is zero at $\pi_m=\pi_0^m$. Its local effect is captured by the quadratic form
-\begin{equation}
- R_m(\theta_0^m+\delta)
- = \tfrac12\delta^\top\E_Q[W_{m-1}^2u_{m,0}u_{m,0}^{\top}]\delta
- +o(\|\delta\|_2^2),
- \label{eq:curvature}
-\end{equation}
-under the differentiability and integrability needed to expand in mean square. Thus a shared $\beta$ defines a context-dependent cost on update directions. The initial minibatch gradient from \eqref{eq:objective} is the usual HAPPO gradient at the behavior actor. The penalty can influence subsequent steps within the same actor update and the prefix encountered by subsequent actors.
-
-\subsection{Exact variance and R\'enyi identities}
-\label{sec:identity}
-
-Let $P_m(dx,da)$ share $d_0$ with $Q$, use the updated actors for positions $1$ through $m$, and use behavior actors thereafter. Then $W_m=dP_m/dQ$. For fixed target policies and square-integrable weights, $\E_QW_m=1$.
-
-\begin{proposition}\label{prop:increment}
-For conditionally factorized policies with common rollout context distribution and finite second moments,
-\begin{align}
- 2R_m &= \Var_Q(W_m)-\Var_Q(W_{m-1}) \label{eq:variance}\\
- &= \exp D_2(P_m\|Q)-\exp D_2(P_{m-1}\|Q),\label{eq:renyi}\\
- \Var_Q(W_k)&=2\sum_{m=1}^{k}R_m,\quad 1\le k\le n,\label{eq:telescoping}
-\end{align}
-where $D_2(P\|Q)=\log\E_Q[(dP/dQ)^2]$.
-\end{proposition}
-
-\begin{proof}
-Conditioned on $x$ and $a^{1:m-1}$ under $Q$, the current ratio has expectation one by normalization of the candidate policy and absolute continuity. Hence
-$\E_Q[W_m-W_{m-1}\mid x,a^{1:m-1}]=0$.
-The increment is orthogonal to $W_{m-1}$ in $L^2(Q)$. Expanding the square of $W_m=W_{m-1}+(W_m-W_{m-1})$ gives \eqref{eq:variance} because both weights have mean one. The definition of $D_2$ gives \eqref{eq:renyi}, and summing the increments from $W_0=1$ gives \eqref{eq:telescoping}.
-\end{proof}
-
-For each actor, write $c_j(x)=\E_{\pi_0^j}[r_j^2\mid x]$. Equivalently,
-\begin{equation}
- 2R_m = \E_{x\sim d_0}\!\left[
- \left(\prod_{j<m}c_j(x)\right)(c_m(x)-1)
- \right].
- \label{eq:factor}
-\end{equation}
-The term $c_m(x)-1$ is the conditional Pearson $\chi^2$ divergence from the candidate to the behavior actor. Equation~\eqref{eq:factor} shows how the method differs from a per-actor divergence penalty, which corresponds to removing the preceding factors. It also explains the potential scale of the problem: if all previous actors have the same conditional second moment $c>1$ at one context, their product has conditional second moment $c^{m-1}$. Integrating over shared contexts generally differs from multiplying the marginal second moments. Equations~\eqref{eq:variance}--\eqref{eq:factor} concern action reweighting at rollout contexts. They do not bound trajectory ratios or the change in state occupancy when the joint policy is deployed.
-
-\paragraph{Relation to the surrogate change.}
-At each sample, the clipped surrogate at ratio $r_m$ differs from its value at ratio one by at most $|W_{m-1}(r_m-1)\hat A|$. This follows because both arguments of the minimum coincide at one, and clipping fixes one and is 1-Lipschitz. Cauchy--Schwarz then gives
-\begin{equation}
- \big|L_m^{\mathrm{HAPPO}}(\theta_m)-L_m^{\mathrm{HAPPO}}(\theta_0^m)\big|
- \le \sqrt{2R_m(\theta_m)\E_{\mathrm{rollout}}[\hat A^2]}.
- \label{eq:surrbound}
-\end{equation}
-In the entropy-free population objective, any candidate that improves or ties $L_m^{\mathrm{reg}}(\theta_0^m)$ must satisfy $\beta R_m\le\sqrt{2R_m\E_{\mathrm{rollout}}[\hat A^2]}$. For $\beta>0$ this yields $2R_m\le 4\E_{\mathrm{rollout}}[\hat A^2]/\beta^2$, including the case $R_m=0$. This observation requires an objective-improvement condition. The experimental optimizer takes minibatch steps and does not enforce that condition.
-
-\subsection{Implementation}
-
-We build on the HARL implementation \citep{zhong2024}. Each sweep starts with $W_0=1$ for every transition and randomly permutes the actors. For actor $m$, the runner keeps $W_{m-1}$ fixed, and the actor minimizes the negative clipped surrogate plus the empirical penalty and the usual entropy loss. The behavior log probabilities stored in the rollout are the denominator for $r_m$, including during repeated PPO epochs. The implementation multiplies component ratios for factorized action dimensions, uses the \emph{unclipped} $r_m$ in the penalty, and detaches the preceding product from the computation graph. When policy active masks are enabled, the averages use active samples. After the actor's update, the runner recomputes its ratio on the rollout, multiplies it into the original product, and passes the result to the next actor. The centralized critic is trained as in HAPPO.
-
-All update positions share one $\beta$ for a given run. Setting $\beta=0$ recovers the reference actor loss. Positive $\beta$ is a soft regularizer, so \eqref{eq:telescoping} does not imply a hard variance budget for the implemented optimizer. In particular, the empirical loss may miss rare large ratios, and a minibatch with such ratios can give a large regularizer gradient after the actor moves. For discrete actors the conditional moment in \eqref{eq:factor} can also be summed over actions. The experiments use the sampled expression in \eqref{eq:regularizer}.
 
 \section{Experiments}
-\label{sec:experiments}
 
-\paragraph{Protocol.}
-We retrospectively compare completed runs in a local HARL experiment archive on Multi-Agent MuJoCo \citep{peng2021}, continuous particle environments through PettingZoo \citep{terry2021}, and the StarCraft Multi-Agent Challenge (SMAC) \citep{samvelyan2019}. Each comparison pairs the same training seed labels at a budget of 10 million environment steps. We require identical saved algorithm and environment configurations after removing the regularizer coefficient and seed value, and verify the evaluation series against both the progress file and the scalar summary. The entropy coefficient is matched within each comparison. The final-window metric averages evaluations with step counts greater than nine million through ten million. We also compute the trapezoidal area over the observed evaluation grid, divided by its span, for each seed. We aggregate seeds with equal weight and report sample standard deviations (SDs) for the final-window metric. Evaluation checkpoints are repeated measurements from a seed, so the number of paired seeds is the sample size. Appendix~\ref{app:repro} gives individual differences, additional settings, and exclusions.
-
-\begin{table}[t]
-\centering
-\caption{Configuration-matched comparisons. Final-window entries are seed mean $\pm$ sample SD, with singleton settings shown without SD. $\Delta$ is the mean paired difference before rounding. The curve column reports time-averaged evaluations in baseline/regularized order. SMAC entries are win rates in percent, and $\Delta$ is in percentage points. All other entries are returns.}
-\label{tab:results}
-\setlength{\tabcolsep}{2.8pt}
-\small
-\begin{tabular}{lrrrrrrr}
-\toprule
-Task & Entropy & $\beta$ & Seeds & HAPPO & Reg-HAPPO & $\Delta$ & Curve \\
-\midrule
-\tablerows{tables/results_rows.tex}
-\bottomrule
-\end{tabular}
-\end{table}
-
-\paragraph{Five-seed comparisons.}
-Figure~\ref{fig:curves} shows the learning trajectories on \texttt{27m\_vs\_30m} and Humanoid 17x1. On \texttt{27m\_vs\_30m}, the final-window mean rose from 53.8\% to 66.9\%, with four positive paired differences out of five. The time-averaged win rate rose from 31.7\% to 40.2\%. On Humanoid 17x1 at entropy coefficient $0.001$, the final-window mean rose from 4538 to 5977 and the time-averaged return from 2224 to 2531. Two of the five Humanoid seeds account for the positive mean difference, while the other three have lower final-window returns with regularization. The observed seed dispersion fell from 2793 to 834. This dispersion describes outcomes across training runs. It is distinct from the variation of sample gradients within an update.
-
-\begin{figure}[t]
-\centering
-\begin{minipage}{.49\linewidth}
-  \centering \small Humanoid 17x1\\[3pt]
-  \input{tables/humanoid_curves}
-\end{minipage}\hfill
-\begin{minipage}{.49\linewidth}
-  \centering \small 27m vs 30m\\[3pt]
-  \input{tables/smac_curves}
-\end{minipage}
-\caption{Evaluation curves for the two five-pair comparisons discussed in the text. Thin lines show individual seeds and thick lines show the checkpoint-wise means. The dashed blue mean is HAPPO and the solid orange mean is Reg-HAPPO.}
-\label{fig:curves}
-\end{figure}
-
-\paragraph{Sensitivity and unfavorable results.}
-Table~\ref{tab:results} shows that the coefficient matters. On Corridor, $\beta=0.001$ raised the mean final-window win rate by 19.9 points over three matched seeds, whereas $\beta=0.01$ raised it by 2.2 points and slightly lowered the time-averaged win rate. In the zero-entropy Humanoid setting, $\beta=0.1$ reduced mean final-window return by 1290. Both tested HalfCheetah 2x3 coefficients reduced the final-window mean, and both Walker2d 6x1 coefficients also reduced that mean. HalfCheetah 6x1 had nearly equal final-window means at $\beta=0.01$ and a lower time-averaged return. ManyAgentSwimmer 10x2 had a higher final-window mean but improved in only one of three seeds. These results show why neither a positive group mean nor a long update sequence alone predicts who benefits.
-
-\paragraph{Mechanism and controls.}
-These runs compare adding the full penalty to the same saved HAPPO configuration. They do not isolate prefix weighting from generic shrinkage of actor updates. A direct test would compare Reg-HAPPO to the unweighted penalty $\frac12\E[(r_m-1)^2]$, with coefficients chosen on separate tuning seeds to match mean per-actor KL on a common diagnostic rollout. The primary mechanism outcome is the second moment of the \emph{next} actor's prefix, stratified by positions early and late in the update order. On held-out rollouts from frozen behavior policies, repeated action samples can estimate the moment in \eqref{eq:factor} and the trace covariance in \eqref{eq:gradcov}. The same comparison should include clip-HAPPO \citep{le2025}, estimating gradient bias relative to the original surrogate gradient when the latter can be computed accurately. If the unweighted penalty attains the same late-prefix moment and gradient dispersion at comparable update size, the results would favor generic shrinkage over the proposed prefix-specific mechanism.
-\todo{Add matched-update ablation, clip-HAPPO comparison, and held-out prefix and gradient measurements.}
-
-\section{Discussion}
-
-The variance identity explains where the regularizer acts. It makes the current actor pay for changing a cumulative ratio in contexts where earlier changes already produced a large second moment. This leaves the original importance-corrected surrogate available to encourage adaptation. It also means that an already extreme prefix may still dominate the current actor's first gradient. The penalty is most directly tested by measuring how much the current update adds to the prefix passed forward, with gradient behavior examined separately.
-
-The existing runs are retrospective, use task-dependent settings, and include seeds used during hyperparameter exploration. In particular, Humanoid seed 3 informed the choice of $\beta=0.01$ with entropy coefficient $0.001$. The coefficients that performed best on the observed seeds are descriptive choices. Small seed counts, differences in policy and simulator configurations across tasks, and missing matched mechanism controls limit inferences about how performance scales with agent count. The sample identity need not hold on a finite, adaptively reused training batch: the sample cross term between $W_{m-1}$ and $W_{m-1}(r_m-1)$ need not vanish. Moreover, sparse logs of aggregate actor gradient norms cannot measure per-sample gradient covariance. The population analysis therefore motivates a targeted diagnostic, while the current experiments support task-specific performance comparisons.
 
 \section{Conclusion}
-
-A candidate actor's contribution to the accumulated importance-weight variance in HAPPO equals the expected square of the change it makes to the cumulative ratio. Regularizing that change provides a direct way to penalize updates more strongly where the preceding strategies have already diverged. Existing matched runs show favorable mean outcomes in some settings and clear losses in others. The remaining empirical question is whether prefix weighting improves the update at a comparable policy step size.
 
 \bibliography{references}
 \bibliographystyle{iclr2027_conference}
 
 \appendix
-\section{Run provenance and evaluation details}
-\label{app:repro}
-
-The analysis script \texttt{reproduce\_results.py} reads saved \texttt{config.json}, \texttt{progress.txt}, and \texttt{logs/summary.json} files from the HARL run archive, and emits the table rows and a list of paired input runs. We report all matched completed comparisons found by the script for the configured benchmark tasks, including single-seed coefficient probes and settings with negative mean differences. If a coefficient has an incomplete or unmatched run, that run is outside the 10-million-step paired analysis. For example, regularized \texttt{25m} runs did not reach 10 million steps. The Corridor $\beta=0.001$ runs for seeds 4 and 5 were incomplete and also lacked matching baseline seeds. Older runs for the same map with differing saved settings or a different algorithm are separate experiments. The late window uses the checkpoints available in that task's grid, which gives 10 points in the recorded MuJoCo comparisons and 13 in the recorded SMAC comparisons. Hyperparameters come from the matching saved configuration for each comparison. Evaluation episode counts in Table~\ref{tab:hyper} are configuration targets.
-
-\begin{table}[htbp]
-\centering
-\caption{Final-window paired differences (Reg-HAPPO minus HAPPO). Dashes indicate unavailable pairs at the fixed budget. Units match Table~\ref{tab:results}.}
-\label{tab:pairs}
-\small
-\begin{tabular}{lrrrrrrr}
-\toprule
-Task & Entropy & $\beta$ & Seed 1 & Seed 2 & Seed 3 & Seed 4 & Seed 5 \\
-\midrule
-\tablerows{tables/paired_rows.tex}
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{table}[htbp]
-\centering
-\caption{Selected saved settings for the compared runs. Columns give the number of actors $n$, entropy coefficient, PPO clip $\epsilon$, actor epochs, actor learning rate, parallel rollout environments, rollout steps per environment, and configured evaluation episode target.}
-\label{tab:hyper}
-\small
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lrrrrrrrr}
-\toprule
-Task & $n$ & Entropy & $\epsilon$ & Epochs & Actor LR & Envs & Steps & Eval. \\
-\midrule
-\tablerows{tables/hyperparameter_rows.tex}
-\bottomrule
-\end{tabular}
-\end{table}
-
-The inspected actor implementation corresponds to the current local HARL source. Saved configurations and scalar logs establish the comparisons above. \todo{Confirm the source revision, dependency versions, and hardware for each historical cohort before claiming exact rerun reproducibility.}
-% TODO: Confirm anonymous artifact release and venue-specific disclosures before submission.
+\section{details}
 
 \end{document}

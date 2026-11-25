@@ -3,6 +3,7 @@
 
 # LaTeX output directory configured in VS Code
 /build/
+/ref
 
 # LaTeX auxiliary files when compiling in the project directory
 *.aux
