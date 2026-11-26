@@ -87,3 +87,73 @@ DBLP 对两次查询均返回 `Expecting value: line 1 column 1 (char 0)`。Sema
 2. **Kuba 等（2022）**。从优势分解和 HAPPO 目标理解前序比率乘积的用途。
 3. **Wang 等（2023）**。比较通过估计器修正处理前序策略变化的方法。
 4. **Le 和 Ta（2025）**。比较前缀裁剪和当前策略更新正则的作用点。正文引用期刊版本，`ref/` 内保存的是作者公开版本 arXiv:2606.25526v1。
+
+## 第 3.1 节 · 合作式多智能体建模
+
+2026-11-26 使用查询 `Decentralized Control of Markov Decision Processes` 检索 1994–2026 年的记录。Semantic Scholar 0、OpenAlex 3、arXiv 0、OpenReview 0、Crossref 3、DBLP 0。去除 1 条跨库重复后有 5 条独立记录。根据摘要筛除 1 篇关于无人机编队形状控制的应用论文，保留 4 条。第 5 条缺少索引摘要，保留待核。完整记录、摘要和索引错误见 [search-results-3.1.json](ref/search-results-3.1.json)。
+
+| 检索排名 | 题名 | 日期 | 会议或期刊 | 引用量 | 相关性分 | 来源 |
+|---:|---|---|---|---:|---:|---|
+| 1 | [The Complexity of Decentralized Control of Markov Decision Processes](https://doi.org/10.1287/moor.27.4.819.297) | 2002-11 | Mathematics of Operations Research | 1652 | 5 | OpenAlex |
+| 2 | [Decentralized Control of Partially Observable Markov Decision Processes](https://doi.org/10.1109/cdc.2013.6760239) | 2013-12 | IEEE CDC | 189 | 5 | OpenAlex、Crossref |
+| 4 | [Decentralized Stochastic Control with Partial History Sharing: A Common Information Approach](https://doi.org/10.1109/tac.2013.2239000) | 2013-06 | IEEE Transactions on Automatic Control | 361 | 4 | OpenAlex |
+| 5 | [A Dynamic Programming Algorithm for Decentralized Markov Decision Processes with a Broadcast Structure](https://doi.org/10.1109/cdc.2010.5718187)（摘要待核） | 2010-12 | IEEE CDC | 16 | 4 | Crossref |
+
+安装版 `search_papers.py` 返回 `unrecognized arguments: --json`，因此使用其检索程序保存结构化记录。arXiv 返回 `Read timed out. (read timeout=5.0)`，DBLP 返回 `Expecting value: line 1 column 1 (char 0)`，OpenReview 和 Semantic Scholar 返回 HTTP 429。各索引的原始错误保存在上面的 JSON 中。
+
+### 补充核对的原文
+
+| 文献 | 与第 3.1 节的关系 |
+|---|---|
+| [Littman（1994）](https://aima.eecs.berkeley.edu/~russell/classes/cs294/f21/papers/Littman_ICML94_Markov_Games.pdf) | 马尔可夫博弈建模的来源 |
+| [Wen 等（2022）](https://proceedings.neurips.cc/paper_files/paper/2022/file/69413f87e5a34897cd010ca698097d0a-Paper-Conference.pdf) | 第 2.1 节提供共享奖励、同时执行及折扣分布的组织方式 |
+| [Kuba 等（2022）](https://arxiv.org/html/2109.11251) | 合作策略的乘积分解及 HAPPO 的独立参数化 |
+
+### 概览
+
+索引结果主要来自分散式控制领域。正文引用 Bernstein 等人的建模论文，以及上表三篇核对过的原文。正文使用 Bernstein 等人论文的期刊书目信息，`ref/` 保存马萨诸塞大学公开的[四作者版本](https://cics.umass.edu/~immerman/pub/bgiz.pdf)。
+
+### 时间与方法趋势
+
+2002 年的记录从模型定义出发，2010–2013 年的记录进一步讨论不同信息结构下的控制和规划。这个样本较小，无法据此判断整个领域的发表趋势。
+
+### 研究主题
+
+- **分散式部分可观测模型**。第 1、2 篇区分环境状态、局部观测和共享目标。
+- **控制者的信息结构**。第 4、5 篇关注部分历史共享或广播所形成的信息结构。
+- **合作学习与策略参数化**。Wen 等和 Kuba 等分别提供问题建模和独立策略因子，与正文的分析设定直接相关。
+
+### 高频标题术语
+
+| 术语 | 篇数 |
+|---|---:|
+| Decentralized | 4 |
+| Markov | 3 |
+| Decision process | 3 |
+| Control | 3 |
+| Partial / partially | 2 |
+
+### 引用量最高的已发表记录
+
+| 排名 | 题名 | 年份 | 引用量 |
+|---:|---|---:|---:|
+| 1 | The Complexity of Decentralized Control of Markov Decision Processes | 2002 | 1652 |
+| 2 | Decentralized Stochastic Control with Partial History Sharing: A Common Information Approach | 2013 | 361 |
+| 3 | Decentralized Control of Partially Observable Markov Decision Processes | 2013 | 189 |
+| 4 | A Dynamic Programming Algorithm for Decentralized Markov Decision Processes with a Broadcast Structure | 2010 | 16 |
+
+### 按首作者统计
+
+| 排名 | 作者 | 篇数 | 引用量 |
+|---:|---|---:|---:|
+| 1 | Daniel S. Bernstein | 1 | 1652 |
+| 2 | Ashutosh Nayyar | 1 | 361 |
+| 3 | Christopher Amato | 1 | 189 |
+| 4 | Jeff Wu | 1 | 16 |
+
+### 阅读顺序
+
+1. Littman（1994）给出马尔可夫博弈建模和联合动作的基本记号。
+2. Bernstein 等（2002）描述共享目标下的局部信息与分散决策。
+3. Wen 等（2022）第 2.1 节展示合作式多智能体强化学习建模在论文中的写法。
+4. Kuba 等（2022）第 2 节和第 4 节把联合策略分解接到 HAPPO 的顺序更新。
