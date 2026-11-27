@@ -52,41 +52,51 @@ We model fully cooperative multi-agent reinforcement learning as a partially obs
 \subsection{Sequential policy updates in HAPPO}
 \label{sec:happo}
 
-Following HAPPO~\citep{kuba2022}, we write each actor's policy as a function of the state $s$ with separate parameters $\theta_i$. For observation-based actors, we include the current joint observation in $s$ and evaluate each actor on its local observation $o^i$. With independent action sampling given $s$, the joint policy factorizes as
+HAPPO collects a rollout under the joint policy $\pi_{\boldsymbol\theta_k}$ at iteration $k$ and reuses it to update one actor at a time~\citep{kuba2022}. The update order is sampled once per iteration, and $i$ denotes an agent's position in that order. The actors have separate parameters $\boldsymbol\theta=(\theta^1,\ldots,\theta^n)$ and sample actions independently given $s$, so the joint policy factorizes as
 \begin{equation}
     \pi_{\boldsymbol\theta}(\boldsymbol a\mid s)
-    =\prod_{i\in\mathcal N}\pi_{\theta_i}^i(a^i\mid s).
+    =\prod_{i\in\mathcal N}\pi_{\theta^i}^i(a^i\mid s).
     \label{eq:factorized-joint-policy}
 \end{equation}
+For local-observation actors, we include the joint observation in $s$ and evaluate each actor on its own observation $o^i$.
 
-HAPPO draws a random update order each iteration, and we index agents by their position in that order. When agent $i$ updates, each agent $j<i$ already has new parameters $\theta_j^+$. The surrogate evaluates the update with these new teammate policies and uses the old-policy advantage $A_{\pi_{\mathrm{old}}}$ as a fixed reference~\citep{kuba2022}. Since the rollout was collected under $\pi_{\mathrm{old}}$, HAPPO reweights the sampled actions by importance sampling. For policies supported by their rollout counterparts, define
+When agent $i$ updates, the preceding agents $j<i$ already use their new policies $\bar\pi^j=\pi_{\theta_{k+1}^j}^j$. The surrogate uses the advantage under $\pi_{\boldsymbol\theta_k}$ as its reference and evaluates agent $i$ with these updated teammate policies. HAPPO uses importance sampling because the rollout actions were sampled before the updates. Write $\boldsymbol a^{<i}$ for the actions of agents $j<i$, and $\bar\pi^{<i}$ and $\pi_{\boldsymbol\theta_k}^{<i}$ for their joint policies after and before the updates. Assuming the rollout policies support the updated policies, the current ratio and the prefix weight are
 \begin{equation}
-    r_j(\theta_j)=\frac{\pi_{\theta_j}^{j}(a^{j}\mid s)}
-                        {\pi_{\mathrm{old}}^{j}(a^{j}\mid s)},
-    \qquad W_{i-1}=\prod_{j<i}r_j(\theta_j^{+}), \qquad W_0=1.
+    \begin{aligned}
+        r_i(\theta^i)
+        &= \frac{\pi_{\theta^i}^i(a^i\mid s)}
+                 {\pi_{\theta_k^i}^i(a^i\mid s)}, \\
+        W_{i-1}(s,\boldsymbol a)
+        &= \frac{\bar\pi^{<i}(\boldsymbol a^{<i}\mid s)}
+                 {\pi_{\boldsymbol\theta_k}^{<i}(\boldsymbol a^{<i}\mid s)}
+         = \prod_{j<i}r_j(\theta_{k+1}^j),
+        \qquad W_0=1.
+    \end{aligned}
     \label{eq:happo-importance-weights}
 \end{equation}
-The prefix weight $W_{i-1}$ changes the action distribution of agents $j<i$ at the sampled state $s$. It stays fixed during agent $i$'s update, while $r_i(\theta_i)$ changes with its policy. Once that update is complete, the next agent uses $W_i=W_{i-1}r_i(\theta_i^+)$.
+The prefix weight $W_{i-1}$ corrects for the preceding agents' policy changes at the sampled state $s$ and stays fixed during agent $i$'s update. After this update, the next agent uses $W_i=W_{i-1}r_i(\theta_{k+1}^i)$.
 
-Write $\E_{\mathrm{old}}$ for expectation under the rollout distribution, with state marginal $d_{\mathrm{old}}$. The joint advantage is $A_{\pi}=Q_{\pi}-V_{\pi}$, where $Q_{\pi}$ and $V_{\pi}$ are the expected remaining returns given $(s,\boldsymbol a)$ and $s$, respectively. Advantage decomposition gives the marginal surrogate $\E_{\mathrm{old}}[W_{i-1}(r_i(\theta_i)-1)A_{\pi_{\mathrm{old}}}]$~\citep{kuba2022}. Using an estimate $\hat A$ of the old-policy advantage, HAPPO maximizes the clipped objective~\citep{kuba2022,schulman2017}
+Let $\hat A(s,\boldsymbol a)$ estimate the joint advantage $A_{\pi_{\boldsymbol\theta_k}}(s,\boldsymbol a)=Q_{\pi_{\boldsymbol\theta_k}}(s,\boldsymbol a)-V_{\pi_{\boldsymbol\theta_k}}(s)$. Advantage decomposition gives the sample estimate $(r_i(\theta^i)-1)W_{i-1}(s,\boldsymbol a)\hat A(s,\boldsymbol a)$ for agent $i$'s marginal improvement surrogate~\citep{kuba2022}. HAPPO applies PPO clipping to the current ratio and maximizes~\citep{kuba2022,schulman2017}
 \begin{equation}
-    \mathcal L_{\mathrm{HAPPO}}^i(\theta_i)
-    =\E_{\mathrm{old}}\!\left[
+    \mathcal L_{\mathrm{HAPPO}}^i(\theta^i)
+    =\E_{\substack{s\sim\rho_{\pi_{\boldsymbol\theta_k}}\\
+                   \boldsymbol a\sim\pi_{\boldsymbol\theta_k}(\cdot\mid s)}}\!
+    \left[
       W_{i-1}\min\!\left\{
-        r_i(\theta_i)\hat A,\,
-        \clip(r_i(\theta_i),1-\epsilon,1+\epsilon)\hat A
+        r_i(\theta^i)\hat A,\,
+        \clip(r_i(\theta^i),1-\epsilon,1+\epsilon)\hat A
       \right\}
     \right],
     \label{eq:happo-surrogate}
 \end{equation}
-where $\epsilon>0$ is the clipping threshold for $r_i$.
+where $\rho_{\pi_{\boldsymbol\theta_k}}$ is the rollout state distribution and $\epsilon>0$ is the clipping threshold.
 
 \subsection{Variance from prefix importance weights}
 \label{sec:prefix-weight-variance}
 
-For fixed old and updated policies, each preceding ratio has mean one when actions are sampled from the rollout policy at a given state $s$. Write $v_j(s)=\Var_{\mathrm{old}}(r_j(\theta_j^+)\mid s)$ for the variance of agent $j$'s ratio. By conditional independence, the prefix weight also has mean one and its variance is
+For fixed old and updated policies, each preceding ratio has mean one under $\pi_{\boldsymbol\theta_k}(\cdot\mid s)$. Write $\Var_k$ for variance under the rollout distribution and $v_j(s)=\Var_k(r_j(\theta_{k+1}^j)\mid s)$ for the variance of agent $j$'s ratio at $s$. By conditional independence, the prefix weight also has mean one and its variance is
 \begin{equation}
-    \Var_{\mathrm{old}}(W_{i-1}\mid s)=\prod_{j<i}\bigl(1+v_j(s)\bigr)-1.
+    \Var_k(W_{i-1}\mid s)=\prod_{j<i}\bigl(1+v_j(s)\bigr)-1.
     \label{eq:prefix-weight-variance}
 \end{equation}
 If every preceding ratio has variance at least $\delta>0$ at $s$, the prefix variance grows at least as $(1+\delta)^{i-1}-1$. A large prefix weight amplifies a sample's contribution to the policy gradient even at the start of agent $i$'s update, when $r_i=1$ and clipping is inactive.
@@ -96,12 +106,12 @@ Each agent simultaneously sets one switch to $a^i\in\{-1,+1\}$. The episode ends
 
 At the start of update $i$, the single-sample gradient with respect to agent $i$'s Bernoulli logit is $g_i=W_{i-1}R(\boldsymbol a)a^i/2$. Averaging over the current switch with all others fixed gives $W_{i-1}/(2n)$, so the expected gradient is $1/(2n)$ at every position. The variance of this conditional average alone gives a lower bound on the gradient variance
 \begin{equation}
-    \Var_{\mathrm{old}}(g_i)
-    \ge \frac{\Var_{\mathrm{old}}(W_{i-1})}{4n^2}
+    \Var_k(g_i)
+    \ge \frac{\Var_k(W_{i-1})}{4n^2}
     = \frac{(1+\epsilon^2)^{i-1}-1}{4n^2}.
     \label{eq:switch-game-variance}
 \end{equation}
-For eight agents and $\epsilon=0.5$, the gradient variance rises from $0.0273$ at the first update to $0.646$ at the last (Fig.~\ref{fig:switch-game}b). This motivates controlling how much variance each update adds to the prefix weight passed to later agents.
+For eight agents and $\epsilon=0.5$, the gradient variance rises from $0.0273$ at the first update to $0.646$ at the last (Fig.~\ref{fig:switch-game}b). With a finite rollout, a few samples with large prefix weights can dominate later agents' gradient estimates and make their policy updates unstable.
 
 \begin{figure}[tb]
     \centering
